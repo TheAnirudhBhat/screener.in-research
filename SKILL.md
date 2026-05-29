@@ -1,31 +1,34 @@
 ---
 name: screener-research
-description: Automates Indian equity stock screening and deep-dive research using Screener.in via Playwright browser automation. Run predefined themed screens (Baid compounders, CDMO, power/infra, consumption, precision aero, or custom), extract results, cross-reference across themes, and deep-dive top picks. Use when the user asks to "screen stocks", "find compounders", "run screener", "research Indian equities", "find undervalued gems", or references Screener.in.
+description: Automates Indian equity stock screening and deep-dive research using Screener.in via Playwright browser automation. Run predefined or custom screens, extract results, cross-reference across themes, and deep-dive companies using Screener's financials (12yr P&L, balance sheet, cash flow, ratios, shareholding, peers). Use when the user asks to "screen stocks", "find stocks", "run screener", "research Indian equities", "find compounders", "find undervalued stocks", or references Screener.in.
 ---
 
 # Screener Research
 
-Automate Indian equity screening and research via Screener.in using Playwright browser tools.
+Automate Indian equity screening and company research via Screener.in using Playwright browser tools.
 
 ## Prerequisites
 
-- User must have Screener.in open and logged in via Playwright (`mcp__playwright__browser_navigate` to `https://www.screener.in/login/`, user completes login manually)
-- Playwright MCP tools available: `browser_navigate`, `browser_evaluate`, `browser_snapshot`, `browser_click`
+- Screener.in open and logged in via Playwright (navigate to `https://www.screener.in/login/`, user completes login)
+- Playwright MCP tools: `browser_navigate`, `browser_evaluate`, `browser_snapshot`, `browser_click`
+- Alternative: Claude-in-Chrome MCP tools work similarly
 
 ## Workflow
 
-### Phase 1: Run Themed Screens
+### Phase 1: Screen
 
-Navigate directly to screen results via URL pattern:
+Navigate to screen results via URL:
 ```
 https://www.screener.in/screen/raw/?sort=Market+Capitalization&order=desc&query=<URL_ENCODED_QUERY>&latest=on
 ```
 
-Check `references/screens.md` for predefined screen queries. To run a custom screen, build the query using Screener's ratio names (see references).
+Add `&latest=on` to filter for companies with latest quarter results only. See `references/screens.md` for predefined queries and all available ratio names.
 
-### Phase 2: Extract Results
+Users can provide their own framework — the predefined screens are starting points, not mandates. Any combination of Screener's 40+ ratios works.
 
-Use `browser_evaluate` with this JavaScript to extract table data:
+### Phase 2: Extract Screen Results
+
+Use `browser_evaluate` with this JavaScript:
 
 ```javascript
 () => {
@@ -50,117 +53,100 @@ Use `browser_evaluate` with this JavaScript to extract table data:
 }
 ```
 
-### Phase 3: Cross-Reference
+### Phase 3: Cross-Reference (optional)
 
-When running multiple themed screens, track which stocks appear across 2+ screens. These are high-conviction candidates — they pass multiple independent quality filters.
-
-Build a cross-reference table:
+When running multiple screens, track stocks appearing in 2+ screens. Multi-theme hits = higher conviction. Build a cross-reference table:
 ```
 Ticker | Name | Screens Hit | MCap | Best Theme Fit
 ```
 
-Prioritize stocks appearing in 3+ screens. Filter out already-held positions (check `latest_snapshot.json`, `us_stocks.json`).
+### Phase 4: Deep-Dive via Screener Company Pages
 
-### Phase 4: Deep-Dive Top Picks
+Navigate to: `https://www.screener.in/company/<TICKER>/consolidated/`
 
-For the top 5-8 cross-referenced stocks, navigate to individual company pages:
-```
-https://www.screener.in/company/<TICKER>/
-```
+Screener provides **10 structured data sections** per company — enough for a full fundamental analysis without leaving the site:
 
-Extract detailed financials via `browser_evaluate`:
+| Section | DOM ID | Data | Use |
+|---------|--------|------|-----|
+| Top Ratios | `.company-ratios li` | MCap, CMP, PE, ROCE, ROE, EPS, 52W H/L, Industry PE, Book Value | Quick snapshot |
+| Pros/Cons | `.pros li`, `.cons li` | Auto-generated flags | Instant red/green signals |
+| Peer Comparison | `#peers` | 9 peers with CMP, PE, ROCE, FII%, Debt, 6mo return | Relative valuation |
+| Quarterly Results | `#quarters` | 13 quarters: Sales, OPM, PAT, EPS | Trend + margin trajectory |
+| Annual P&L | `#profit-loss` | 12 years + compounded growth + ROE history | Long-term track record |
+| Balance Sheet | `#balance-sheet` | 12 years: equity, debt, reserves, assets | Leverage + dilution check |
+| Cash Flow | `#cash-flow` | 12 years: CFO, investing, financing | FCF quality + capex intensity |
+| Ratios | `#ratios` | 12 years: ROCE, debtor days, inventory days | Moat durability over cycles |
+| Shareholding | `#shareholding` | 12 quarters: promoter/FII/DII/public % | Smart money tracking |
+| Documents | `#documents` | BSE/NSE filings, earnings transcripts | Latest announcements |
+
+#### Company Page Extractor
+
+Use this comprehensive `browser_evaluate` to pull all key data in one call:
 
 ```javascript
 () => {
-  // Get key metrics from the company page
-  const getMetric = (label) => {
-    const items = document.querySelectorAll('.company-ratios li, .ratios-table tr');
-    for (const item of items) {
-      if (item.textContent.includes(label)) {
-        const val = item.querySelector('.value, td:last-child, .number');
-        return val?.textContent?.trim() || '';
-      }
-    }
-    return '';
-  };
-  
-  // Get quarterly results table
-  const quarters = [];
-  const qTable = document.querySelector('#quarters');
-  if (qTable) {
-    const headers = Array.from(qTable.querySelectorAll('th')).map(h => h.textContent.trim());
-    const rows = qTable.querySelectorAll('tbody tr');
-    rows.forEach(row => {
-      const label = row.querySelector('td')?.textContent?.trim();
-      const vals = Array.from(row.querySelectorAll('td')).slice(1).map(c => c.textContent.trim());
-      quarters.push(`${label}: ${vals.join(' | ')}`);
+  const clean = (s) => s?.textContent?.trim().replace(/\s+/g,' ') || '';
+  const tableData = (id, maxRows) => {
+    const rows = [];
+    document.querySelectorAll(`#${id} table tr`).forEach((row, i) => {
+      if (maxRows && i >= maxRows) return;
+      rows.push(Array.from(row.querySelectorAll('td, th')).map(c => clean(c)).join('|'));
     });
-  }
-  
+    return rows;
+  };
+
+  // Top metrics
+  const ratios = {};
+  document.querySelectorAll('.company-ratios li, #top-ratios li').forEach(li => {
+    const name = li.querySelector('.name')?.textContent?.trim();
+    const value = li.querySelector('.value, .number')?.textContent?.trim().replace(/\s+/g,'');
+    if (name) ratios[name] = value;
+  });
+
+  // Pros & Cons
+  const pros = Array.from(document.querySelectorAll('.pros li')).map(li => clean(li));
+  const cons = Array.from(document.querySelectorAll('.cons li')).map(li => clean(li));
+
   return JSON.stringify({
-    url: window.location.href,
-    name: document.querySelector('h1')?.textContent?.trim(),
-    quarters: quarters.slice(0, 5)
+    ratios,
+    pros,
+    cons,
+    peers: tableData('peers', 10),
+    quarters: tableData('quarters', 14),
+    profitLoss: tableData('profit-loss', 15),
+    balanceSheet: tableData('balance-sheet', 12),
+    cashFlow: tableData('cash-flow', 8),
+    ratioHistory: tableData('ratios', 8),
+    shareholding: tableData('shareholding', 7),
+    about: document.querySelector('.about p, .company-profile p')?.textContent?.trim()?.substring(0, 500)
   });
 }
 ```
 
-For each pick, also fan out a WebSearch agent for recent news, analyst ratings, and thesis validation.
+This returns structured JSON with the full fundamental picture. Parse it to:
+1. Check margin trajectory (quarterly OPM trend)
+2. Verify growth consistency (annual P&L compounded rates)
+3. Assess leverage (balance sheet debt trend)
+4. Evaluate FCF quality (CFO vs PAT, capex as % of CFO)
+5. Track smart money (FII/DII trend in shareholding)
+6. Compare valuation vs peers (PE, ROCE relative ranking)
 
 ### Phase 5: Verdict
 
-For each deep-dived stock, assign a verdict:
+For each researched stock, assign a verdict based on the user's investment framework. Common frameworks include:
 
-- **BUY** — Passes Baid framework (ROIC > cost of capital, moat, reinvestment runway), reasonable valuation, sector tailwind, no red flags
-- **WATCH** — Quality business but valuation stretched OR sector tailwind unclear OR needs one more quarter of data
-- **AVOID** — Fails Baid framework (weak moat, capital cycle risk, equity dilution, declining margins)
+- **Quality compounding**: ROIC > cost of capital, moat, reinvestment runway (Baid, Mukherjea)
+- **GARP**: Growth at reasonable price — PEG <1.5, earnings acceleration
+- **Deep value**: Low PE/PB with catalyst, margin of safety
+- **Momentum + quality**: RS rank + fundamentals filter
+- **Thematic**: Sector tailwind + company positioning (e.g., China+1 for CDMO)
 
-Output a final ranked table with: Ticker, Name, CMP, MCap, PE, ROCE, Theme Fit, Verdict, One-line Rationale.
+Output a final table: Ticker, Name, CMP, MCap, PE, ROCE, Theme Fit, Verdict, Rationale.
 
-## Running Custom Screens
+## Tips
 
-To create a custom screen, use any of these Screener.in ratio names in the query:
-- Market Capitalization, Current price, Price to Earning, PEG Ratio
-- Sales, Sales growth, Sales growth 3Years, Sales growth 5Years
-- Profit after tax, Profit growth, Profit growth 3Years, Profit growth 5Years
-- OPM (Operating Profit Margin), Return on capital employed, Return on equity
-- Average return on equity 5Years, Average return on equity 3Years
-- Debt to equity, Current ratio, Interest Coverage Ratio
-- Promoter holding, Change in promoter holding, Pledged percentage
-- Price to book value, Price to Sales, Price to Free Cash Flow, EVEBITDA
-- Dividend yield, EPS, Enterprise Value
-- Return over 3months, 6months, 1year, 3years, 5years
-- YOY Quarterly sales growth, YOY Quarterly profit growth
-- Sales latest quarter, Profit after tax latest quarter
-
-Combine with AND/OR operators and >, < comparisons. Add `&latest=on` to filter for latest results only.
-
-## Baid Framework Quick Reference
-
-From Gautam Baid (Stellar Wealth Partners, "The Joys of Compounding"):
-
-**Compounding Machine Criteria:**
-1. ROIC > cost of capital (ROCE >15% as proxy)
-2. Strong sustainable competitive advantage (moat)
-3. Ample reinvestment opportunity at high returns (low dividend payout)
-
-**Management Quality Test:**
-- 5-10yr organic market share growth
-- No equity dilution (warrant/QIP issuance = red flag)
-- Stable operating margins across cycles
-
-**Position Sizing:**
-- 3-5% starter position, average UP only on execution
-- Max 15% single stock, max 30% single sector
-
-**Sector Tailwinds (Stage 2 India bull market):**
-- Precision engineering / aerospace exports (FTA-driven)
-- Innovator CDMO (AI drug discovery bottleneck)
-- Power ancillaries / data center infrastructure
-- Domestic consumption (tax cuts + rate cuts)
-
-**Avoid:**
-- Traditional IT services (AI headcount disruption)
-- Hyper-competitive quick commerce (capital cycle trap)
-- Silver at retail euphoria peaks
-- Capex-heavy stocks in de-rating cycle
+- Screener's "Show all Ratios" button on the screen creation page lists every available field
+- Custom ratios can be created at `https://www.screener.in/ratios/`
+- For sector-specific screens, browse 50K+ community screens at `https://www.screener.in/screens/`
+- The `&latest=on` flag filters for companies with the most recent quarter results — always use it
+- Screener data is from BSE/NSE filings — authoritative, no estimation
