@@ -12,7 +12,9 @@ Instead of manually building queries and tabbing between company pages, this ski
 2. **Extracts structured data** — parses result tables via JavaScript evaluation
 3. **Cross-references** — finds stocks passing multiple independent screens (higher conviction)
 4. **Deep-dives companies** — pulls 12 years of financials, quarterly trends, peer comparisons, shareholding patterns, and filings from Screener's company pages
-5. **Outputs verdicts** — ranked shortlist with BUY / WATCH / AVOID based on your framework
+5. **Auto red-flag scanner** — detects declining ROCE, rising debt, negative CFO, promoter selling, OPM compression
+6. **Peer + valuation context** — PE vs Industry PE, peer ranking on PE and ROCE, relative valuation signals
+7. **Outputs verdicts** — ranked shortlist with BUY / WATCH / AVOID based on your framework
 
 ## What data is available
 
@@ -32,6 +34,43 @@ Screener.in provides **10 structured sections per company** — enough for full 
 | Documents | 100+ filings | BSE/NSE announcements, earnings transcripts |
 
 All data is from BSE/NSE filings — authoritative, not estimated.
+
+## Auto red-flag scanner
+
+The company page extractor automatically detects these warning signals:
+
+| Red Flag | What it checks | Threshold |
+|----------|---------------|-----------|
+| ROCE declining | Last 3 years of ROCE from ratio history | Consecutive decline |
+| Debt rising | Borrowings trend from balance sheet | >50% growth over 3 years |
+| Negative CFO | Operating cash flow from cash flow statement | Latest year < 0 |
+| Promoter selling | Shareholding pattern trend | >1.5pp decline over recent quarters |
+| OPM compression | Operating profit margin from quarterly results | >3pp drop over 4 quarters |
+
+Stocks with 2+ red flags default to AVOID. The extractor also returns peer ranking (PE and ROCE rank among 9 peers) and valuation context (PE vs Industry PE premium/discount).
+
+## Screen caching & diff-aware re-screening
+
+Re-running a screen compares against the cached previous run:
+
+```
+Screen: baid-compounders (last run: 14 days ago)
+Results: 42 → 45 (+3)
+NEW (3): TICKER_A, TICKER_B, TICKER_C ← auto deep-dive
+DROPPED (0): none
+RETAINED (42): stable
+```
+
+New entrants get automatic deep-dive priority. Caches persist at `references/cache/<screen-name>.json`. A persistent watchlist at `references/watchlist.json` tracks entry triggers across sessions.
+
+## Portfolio-aware screening
+
+When a portfolio snapshot exists, the skill:
+- **Excludes held stocks** from deep-dive (marks them `HELD` in output)
+- **Flags sector correlation** ("Same sector as ARTEMISMED — adds concentration")
+- **Suggests role-bucket fit** ("NEULANDLAB → growth bucket, TDPOWERSYS → cyclicals")
+
+Works standalone if no portfolio file exists.
 
 ## Predefined screens
 
